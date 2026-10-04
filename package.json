@@ -1,0 +1,8 @@
+{
+  "name": "anmol-jewelers-catalog",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "cloudinary": "^2.2.0"
+  }
+}
