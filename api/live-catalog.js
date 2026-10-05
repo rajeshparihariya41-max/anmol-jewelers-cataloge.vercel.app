@@ -1,61 +1,85 @@
-import cloudinary from '../lib/cloudinary.js';
-import fs from 'fs';
-import path from 'path';
+// ─── Live Catalog API (Vercel serverless function) ─────────────────────
+// File: api/live-catalog.ts   (project ROOT me "api" folder banao, isme rakho)
+// Vercel ise khud https://<domain>/api/live-catalog bana dega. Koi adapter nahi chahiye.
+//
+// Vercel env vars (project Settings → Environment Variables):
+//   CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET,
+//   LIVE_PUBLISH_TOKEN
+// Aur: pnpm add cloudinary
+import { v2 as cloudinary } from 'cloudinary';
 
-let memoryCatalog = null;
+// Vercel Node runtime me Buffer hota hai; tsc ke liye local type
+// (tsconfig me kuch badalne ki zaroorat nahi)
+declare const Buffer: {
+  from(data: string, encoding: 'utf8' | 'utf-8'): { toString(encoding: 'base64'): string };
+};
 
-export default async function handler(req, res){
-  res.setHeader('Access-Control-Allow-Origin','*');
-  res.setHeader('Access-Control-Allow-Methods','POST, GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers','Content-Type, x-publish-token');
-  if(req.method==='OPTIONS') return res.status(200).end();
-  
-  const { action } = req.query;
-  const bodyAction = req.body?.action;
-  const act = action || bodyAction;
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
 
-  // GET catalog
-  if(req.method==='GET'){
-    try{
-      const p = path.join(process.cwd(), 'catalog/live/data.json');
-      if(fs.existsSync(p)){
-        const data = fs.readFileSync(p,'utf8');
-        return res.status(200).send(data);
-      }
-      if(memoryCatalog) return res.status(200).json(memoryCatalog);
-      return res.status(200).json({shopName:"Anmol Jewelers", items:[], categories:[], metalRates:{}, updatedAt: new Date().toISOString()});
-    }catch(e){
-      return res.status(200).json(memoryCatalog || {items:[]});
-    }
+const PUBLISH_TOKEN = process.env.LIVE_PUBLISH_TOKEN;
+const JSON_PUBLIC_ID = 'anmol-catalog/live-catalog.json';
+const PHOTO_FOLDER = 'anmol-catalog/photos';
+
+export default async function handler(req: any, res: any) {
+  // Browser se seedha taaza JSON (zaroorat ho to)
+  if (req.method === 'GET') {
+    const cloud = process.env.CLOUDINARY_CLOUD_NAME;
+    if (!cloud) return res.status(500).json({ error: 'Not configured' });
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    return res.redirect(
+      307,
+      `https://res.cloudinary.com/${cloud}/raw/upload/${JSON_PUBLIC_ID}?t=${Date.now()}`,
+    );
   }
 
-  if(req.method!=='POST') return res.status(405).json({error:'Method not allowed'});
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
 
-  try{
-    if(act==='uploadPhoto'){
-      const { key, base64 } = req.body;
-      if(!base64) return res.status(400).json({error:'base64 missing'});
-      const result = await cloudinary.uploader.upload(`data:image/jpeg;base64,${base64}`, {
-        folder: 'anmol-jewelers-catalog',
-        public_id: key.replace(/[^a-zA-Z0-9_-]/g,'_'),
+  const token = req.headers['x-publish-token'];
+  if (!PUBLISH_TOKEN || token !== PUBLISH_TOKEN) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const body = req.body || {};
+  try {
+    // ── Photo upload (signed, overwrite allowed) ──
+    if (body.action === 'uploadPhoto') {
+      const { key, base64 } = body;
+      if (!key || !base64) return res.status(400).json({ error: 'key/base64 missing' });
+      const safeKey = String(key).replace(/[^a-zA-Z0-9_-]/g, '_');
+      const suppliedMimeType = String(body.mimeType || 'image/jpeg').toLowerCase();
+      const mimeType = /^image\/[a-z0-9.+-]+$/.test(suppliedMimeType)
+        ? suppliedMimeType
+        : 'image/jpeg';
+      const result = await cloudinary.uploader.upload(`data:${mimeType};base64,${base64}`, {
+        public_id: `${PHOTO_FOLDER}/${safeKey}`,
+        resource_type: 'image',
         overwrite: true,
+        invalidate: true,
       });
-      return res.status(200).json({url: result.secure_url});
+      return res.status(200).json({ url: result.secure_url });
     }
-    if(act==='publish'){
-      const { data } = req.body;
-      if(!data) return res.status(400).json({error:'data missing'});
-      memoryCatalog = data;
-      try{
-        const dir = path.join(process.cwd(), 'catalog/live');
-        if(!fs.existsSync(dir)) fs.mkdirSync(dir,{recursive:true});
-        fs.writeFileSync(path.join(dir,'data.json'), JSON.stringify(data, null, 2));
-      }catch(e){ console.log('write fail', e.message); }
-      return res.status(200).json({ok:true, jsonUrl:'/catalog/live/data.json'});
+
+    // ── Live JSON publish (signed, overwrite allowed) ──
+    if (body.action === 'publish') {
+      const json = JSON.stringify(body.data ?? {});
+      const result = await cloudinary.uploader.upload(
+        `data:application/json;base64,${Buffer.from(json, 'utf8').toString('base64')}`,
+        { public_id: JSON_PUBLIC_ID, resource_type: 'raw', overwrite: true, invalidate: true },
+      );
+      return res.status(200).json({ jsonUrl: result.secure_url, updatedAt: body.data?.updatedAt ?? null });
     }
-    return res.status(400).json({error:'unknown action'});
-  }catch(e){
-    console.error(e);
-    return res.status(500).json({error:e.message});
+
+    return res.status(400).json({ error: 'Unknown action' });
+  } catch (e: any) {
+    console.error('[live-catalog] error', e);
+    return res.status(500).json({ error: e?.message || 'Upload failed' });
   }
 }
