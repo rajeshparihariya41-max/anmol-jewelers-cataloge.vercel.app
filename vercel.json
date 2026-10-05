@@ -1,33 +1,42 @@
 {
-      "$schema": "https://openapi.vercel.sh/vercel.json",
-      "rewrites": [
-        {
-          "source": "/",
-          "destination": "/catalog/live/index.html"
-        },
-        {
-          "source": "/catalog/live/",
-          "destination": "/catalog/live/index.html"
-        }
-      ],
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "rewrites": [
+    {
+      "source": "/",
+      "destination": "/catalog/live/index.html"
+    },
+    {
+      "source": "/catalog/live/",
+      "destination": "/catalog/live/index.html"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/catalog/live",
       "headers": [
         {
-          "source": "/catalog/live",
-          "headers": [
-            {
-              "key": "Cache-Control",
-              "value": "no-store, max-age=0"
-            }
-          ]
-        },
+          "key": "Cache-Control",
+          "value": "no-store, max-age=0"
+        }
+      ]
+    },
+    {
+      "source": "/catalog/live/data.json",
+      "headers": [
         {
-          "source": "/catalog/live/data.json",
-          "headers": [
-            {
-              "key": "Cache-Control",
-              "value": "no-store, max-age=0"
-            }
-          ]
+          "key": "Cache-Control",
+          "value": "no-store, max-age=0"
+        }
+      ]
+    },
+    {
+      "source": "/catalog/live.json",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-store, max-age=0"
         }
       ]
     }
+  ]
+}
